@@ -1,74 +1,54 @@
-import os
-from datetime import datetime, timedelta, timezone
+name: Update Professional Calendar
 
-import requests
-import icalendar
-import recurring_ical_events
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
-SOURCE_URL = os.environ["OUTLOOK_ICS_URL"]
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
-now = datetime.now(timezone.utc)
-window_start = now - timedelta(days=60)
-window_end = now + timedelta(days=120)
+jobs:
+  update-calendar:
+    runs-on: ubuntu-latest
 
-response = requests.get(SOURCE_URL, timeout=60)
-response.raise_for_status()
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-source_calendar = icalendar.Calendar.from_ical(response.content)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-output_calendar = icalendar.Calendar()
-output_calendar.add("prodid", "-//WhiteLab Professional Calendar//")
-output_calendar.add("version", "2.0")
-output_calendar.add("calscale", "GREGORIAN")
-output_calendar.add("method", "PUBLISH")
+      - name: Install dependencies
+        run: |
+          pip install requests icalendar recurring-ical-events
 
-# Expand recurring events and retrieve occurrences in our rolling window.
-occurrences = recurring_ical_events.of(source_calendar).between(
-    window_start,
-    window_end,
-)
+      - name: Generate filtered calendar
+        env:
+          OUTLOOK_ICS_URL: ${{ secrets.OUTLOOK_ICS_URL }}
+        run: |
+          python filter_calendar.py
 
-for event in occurrences:
-    # Only process calendar events.
-    if event.name != "VEVENT":
-        continue
+      - name: Commit calendar
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/professional.ics
+          git diff --cached --quiet || git commit -m "Update professional calendar"
+          git push
 
-    new_event = icalendar.Event()
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
 
-    # Copy the event properties while excluding recurrence rules.
-    # Recurring events have already been expanded into individual occurrences.
-    excluded = {
-        "RRULE",
-        "RDATE",
-        "EXDATE",
-        "RECURRENCE-ID",
-    }
-
-    for key, value in event.items():
-        if key not in excluded:
-            new_event.add(key, value)
-
-    # Give each generated occurrence a unique UID.
-    original_uid = str(event.get("UID", ""))
-    recurrence_id = event.get("RECURRENCE-ID")
-
-    if recurrence_id:
-        new_event["UID"] = (
-            f"{original_uid}-{str(recurrence_id).replace(':', '-')}"
-        )
-    else:
-        new_event["UID"] = original_uid
-
-    output_calendar.add_component(new_event)
-
-
-os.makedirs("public", exist_ok=True)
-
-with open("public/professional.ics", "wb") as f:
-    f.write(output_calendar.to_ical())
-
-print(
-    f"Calendar generated: "
-    f"{window_start.isoformat()} to {window_end.isoformat()}"
-)
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
