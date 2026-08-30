@@ -27,7 +27,6 @@ output_calendar.add("method", "PUBLISH")
 occurrences = recurring_ical_events.of(source_calendar).between(
     window_start,
     window_end,
-    inc=True,
 )
 
 for event in occurrences:
